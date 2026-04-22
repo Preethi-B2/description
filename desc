@@ -1,0 +1,37 @@
+1. The first page in ETRM selection agent is for requirements gathering.
+Here in this page, we will provide inputs on the UI - 
+Company Name (Exxon Mobil), 
+project start date(4/20/2026), 
+user base (how many users will utilize the ETRM system) - 50 to 200. Users can be anyone from the front, back and middle office.
+Select Industry segment of the client- Fully integrated (means a company that has its presence in upstream, downstream and middlestream sectors).
+Tradeable products: Crude oil, Refined products(gasoline, diesel, jet fuel), LNG, NGL, Petrochemical, Renewables
+Region: North America, Europe and South America
+Trade Type: Select All options available under Physical. Under Financials, select : Futures, Options and Swaps
+Pricing Model: Select all options except Prepayment
+Current C/ETRM Product(s): select SAP Commodity Management
+ERP System: SAP S/4 HANA
+Deployment: Hybrid
+
+2. Also, along with this input data, we will have data related to different ETRM systems(internal to EY), public data related to various ETRM systems which will be in sharepoint
+
+2. Next page is the Solution Analysis screen
+Based on the information gathered in the requirements gathering phase, we would like this agent to provide a shortlist of 3 potential ETRM systems.
+
+There are several scales - Tradable Products Scale,Instruments scale, ERP integration scale, size and scalability scale. We also have the pros and cons in this page.
+
+Ex: RightAngle will cover 75% of the clients tradeable products
+3. This is the Competitor Benchmarking screen:
+This will display the list of top three competitors of your client, and what they are doing in terms of ETRM space
+Provide details such as Competitor Name, ETRM System, Strengths, Painpoints, Duration (how long it took them to implement the system), and Cost.
+
+Input: It is not public information. The competitor benchmarking data is something that is not available in public and it will be provided by business team as it is data internal to EY. These files will be kept in a sharepoint location.
+
+Include a section that says "Why Shortlist Wins"
+
+The shortlisted systems may not necessarily be used by the competitors.
+4. The final page on the UI is the Executive summary tailored to your client requirements.(It is a general type of an overview)
+We have description on every shortlisted ETRM, Rationale and key features
+Here we will have the ability to download the content in the form of PPT, which will include slides on 
+the details provided in every page that we saw.
+Access to the app should be restricted
+
