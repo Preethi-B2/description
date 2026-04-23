@@ -1,0 +1,208 @@
+You are a Senior Enterprise Software Architect and Energy Trading Systems SME.
+Your task is to design and generate a complete Python‑based, rule‑driven ETRM Selection Agent that evaluates, scores, and shortlists Energy Trading & Risk Management (ETRM) systems based on structured business requirements.
+This is NOT an LLM‑reasoning agent.
+It must be deterministic, explainable, auditable, and consulting‑grade.
+
+TECH STACK & CONSTRAINTS
+
+Language: Python 3
+IDE: VS Code
+Architecture: Rule‑based logic + weighted scoring
+Libraries allowed:
+
+pandas
+numpy
+python‑pptx (for slide generation scaffolding only)
+
+
+❌ No ML models
+❌ No probabilistic logic
+❌ No hallucinated data
+✅ All logic must be traceable and explainable
+
+
+BUSINESS CONTEXT
+We are building an ETRM Selection Tool for consulting use.
+Client Example (Hard‑coded for now):
+
+Company: Exxon Mobil
+Industry: Fully Integrated (Upstream + Midstream + Downstream)
+Regions: North America, Europe, South America
+Users: 50–200 (Front, Middle, Back Office)
+ERP: SAP S/4HANA
+Current ETRM: SAP Commodity Management
+Deployment: Hybrid
+Trade Types:
+
+Physical: All
+Financial: Futures, Options, Swaps
+
+
+Products:
+
+Crude Oil
+Refined Products (Gasoline, Diesel, Jet Fuel)
+LNG
+NGL
+Petrochemicals
+Renewables
+
+
+Pricing Models: All except Prepayment
+
+
+INPUTS TO THE AGENT
+1. UI Inputs (Provided as Python dict / JSON)
+Use the client details above as a sample input structure.
+
+2. Excel Input – Requirements Traceability Matrix (RTM)
+The agent must ingest an Excel file with columns:
+
+RTM ID
+Requirement
+Description
+Acceptance Criteria
+Priority
+Functional Area
+Owner
+Effort
+
+The agent must:
+
+Parse RTM
+Map requirements to capability dimensions
+Influence scoring logic using priority
+
+
+3. ETRM Master Data (Internal + Public)
+Each ETRM system has:
+
+Supported products
+Supported instruments
+SAP integration strength
+Regional support
+Deployment models
+Max user capacity
+Strengths
+Limitations
+
+Assume this data is loaded from Excel / CSV (no hardcoding).
+
+4. Competitor Benchmarking Data (EY‑Internal, Non‑Public)
+Each record includes:
+
+Competitor name
+ETRM system used
+Strengths
+Pain points
+Implementation duration
+Cost range
+
+⚠️ This data must NOT be invented and must be read from file.
+
+FUNCTIONAL REQUIREMENTS
+PAGE 1 – Requirements Gathering
+
+Summarize client requirements
+Categorize by trading, risk, settlement, integration, scale
+No recommendations at this stage
+
+
+PAGE 2 – Solution Analysis
+The agent must:
+✅ Apply eligibility rules (hard disqualifiers)
+✅ Apply weighted scoring
+✅ Produce exactly 3 shortlisted ETRMs
+Eligibility Rules (Examples)
+
+Must support Hybrid deployment
+Must support SAP S/4HANA
+Must support Physical trading
+Must scale to 200 users
+
+
+Weighted Scoring Dimensions (Must total 100%)
+
+Tradable Products Coverage – 30%
+Instruments Coverage – 20%
+ERP Integration Strength – 20%
+Size & Scalability – 15%
+Deployment Fit – 10%
+Regional Coverage – 5%
+
+Each dimension must:
+
+Output a numeric score (0–100)
+Be fully explainable
+
+Example:
+
+“RightAngle covers ~75% of Exxon Mobil’s required tradable products”
+
+
+PAGE 3 – Competitor Benchmarking
+Display:
+
+Top 3 competitors
+Their ETRM systems
+Duration
+Cost
+Strengths
+Pain points
+
+Include a generated section:
+“Why Shortlist Wins”
+Explain why the recommended ETRMs are better suited for this client, even if competitors use different systems.
+
+PAGE 4 – Executive Summary
+Generate client‑ready narrative content:
+
+Overview
+Shortlisted systems
+Rationale
+Key features
+Risks & considerations
+
+Tone:
+
+Non‑technical
+Executive
+Consulting‑grade
+
+
+OUTPUT REQUIREMENTS
+Claude must generate:
+
+✅ Project folder structure
+✅ Core Python modules
+
+eligibility rules
+scoring engine
+shortlisting logic
+RTM parsing
+
+
+✅ Clear inline comments
+✅ Human‑readable explanations for every rule
+✅ PPT content structure (no styling required)
+
+
+DELIVERY FORMAT
+Respond with:
+
+Clear section headers
+Python code blocks where applicable
+Do NOT embed code inside tables
+Assume this will be pasted directly into VS Code
+
+
+IMPORTANT CONSTRAINTS
+
+Do not hallucinate competitor data
+Do not use LLM‑style language (“may”, “likely”)
+Prefer deterministic outcomes
+Assume EY consulting standards
+
+
+BEGIN NOW
+Design and output the complete ETRM Selection Agent as specified above.
