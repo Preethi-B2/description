@@ -1,0 +1,373 @@
+
+
+# ChemSpecAI: End-to-End Execution Flow for Demo Presentation
+
+---
+
+## Part 1: Document Upload Flow — From PDF to Searchable Index
+
+### Step 1: User Action — PDF Upload
+
+The user navigates to the **Upload** tab in the Streamlit interface and selects a PDF file (SDS or TDS). The file passes through validation checks:
+
+- File type must be PDF
+- File size must not exceed 20 MB
+
+Once validated, the user clicks **"Process & Index Document"**.
+
+---
+
+### Step 2: Raw PDF → Azure Blob Storage
+
+```
+ui/tab_upload.py → services/blob_service.py → Azure Blob Storage
+```
+
+The raw PDF bytes are uploaded to **Azure Blob Storage** under the path:
+
+```
+{user_id}/{timestamp}_{filename}
+```
+
+**Why Blob Storage?** Provides durable, scalable storage for raw documents with built-in security and per-user folder isolation.
+
+---
+
+### Step 3: Text Extraction
+
+```
+core/document_processor.py → pypdf.PdfReader
+```
+
+The system uses `pypdf` library to extract all text from the PDF:
+
+```python
+reader = pypdf.PdfReader(BytesIO(pdf_bytes))
+for page in reader.pages:
+    text = page.extract_text()
+```
+
+**Why pypdf?** Lightweight, pure Python PDF text extraction without external dependencies.
+
+---
+
+### Step 4: Document Classification
+
+```
+services/openai_service.classify_document() → Azure OpenAI (GPT-4o)
+```
+
+The extracted text is sent to **Azure OpenAI** with a classification prompt. The LLM analyzes the content and determines whether this is an **SDS** (Safety Data Sheet) or **TDS** (Technical Data Sheet).
+
+**Why OpenAI?** The LLM has broad domain understanding to accurately classify chemistry documents based on section patterns, terminology, and structure.
+
+---
+
+### Step 5: Section Detection & Chunking
+
+```
+utils/chunker.py → tiktoken (cl100k_base)
+```
+
+The text is split into overlapping chunks using token-based chunking:
+
+1. Text is split into sentences (natural boundaries preserved)
+2. Sentences are accumulated into chunks of ~500 tokens
+3. 50-token overlap between consecutive chunks preserves cross-chunk context
+
+**Why tiktoken?** Provides accurate token counting compatible with GPT-4/embedding models, ensuring chunks fit within LLM context windows.
+
+---
+
+### Step 6: Embedding Generation
+
+```
+services/openai_service.generate_embeddings_batch() → Azure OpenAI (text-embedding-3-large)
+```
+
+Each chunk is converted to a 3072-dimensional vector using **Azure OpenAI text-embedding-3-large**:
+
+```python
+response = client.embeddings.create(
+    model="text-embedding-3-large",
+    input=text,
+    dimensions=3072,
+)
+```
+
+**Why text-embedding-3-large?** High-quality embeddings with 3072 dimensions provide better semantic matching for chemistry terminology.
+
+---
+
+### Step 7: Indexing to Azure AI Search
+
+```
+services/search_service.index_chunks() → Azure AI Search
+```
+
+The chunks (with content, section, type, source, and vector) are indexed to **Azure AI Search**:
+
+```python
+{
+    "id": "chunk_001",
+    "content": "First aid measures: Eye contact...",
+    "section": "Section 4: First Aid Measures",
+    "type": "sds",
+    "source": "chemical_x_sds.pdf",
+    "contentVector": [0.123, -0.456, ...],  # 3072 dims
+}
+```
+
+**Why Azure AI Search?** Provides HNSW vector search, metadata filtering, and enterprise-grade scalability out of the box.
+
+---
+
+### Upload Flow Summary
+
+```
+User uploads PDF
+       ↓
+Blob Storage (raw file)
+       ↓
+pypdf text extraction
+       ↓
+OpenAI classification (SDS/TDS)
+       ↓
+Token-based chunking (tiktoken)
+       ↓
+Embedding generation (text-embedding-3-large)
+       ↓
+Azure AI Search index
+```
+
+---
+
+## Part 2: Query Flow — From Question to Grounded Answer
+
+### Step 1: User Action — Submit Question
+
+The user navigates to the **Chat** tab and types a question:
+
+> *"What is the flash point of this chemical?"*
+
+---
+
+### Step 2: Query Classification (Agent 1)
+
+```
+ui/tab_chat.py → core/graph.py → core/nodes.classify_node
+```
+
+The question enters the **LangGraph pipeline**. First node: `classify_node`
+
+**Agent 1 — Query Classifier:**
+- Receives: `state["question"]` + conversation history
+- Calls: `services/openai_service.classify_query()`
+- Determines: Is this an SDS question or TDS question?
+- Returns: `{"doc_type": "sds"}` or `{"doc_type": "tds"}`
+
+**Why classify queries?** Ensures retrieval searches only the relevant document type, improving accuracy and reducing noise.
+
+---
+
+### Step 3: Agent Reasoning Loop (Agent 2)
+
+```
+core/nodes.agent_node → Azure OpenAI (GPT-4o) + Tools
+```
+
+**Agent 2 — Reasoning Agent** receives:
+- System prompt (from system_prompt.md)
+- Conversation memory (last 5 turns)
+- Current user question
+
+The agent is **bound to tools** via:
+
+```python
+llm = AzureChatOpenAI(...).bind_tools(TOOLS)
+# TOOLS = [retrieve_chunks]
+```
+
+---
+
+### Step 4: Tool Decision — Should I retrieve?
+
+The agent analyzes the question. Two outcomes:
+
+**Outcome A — No tool needed:**
+If the question doesn't require document grounding (e.g., "Hello"), the agent generates a direct response and proceeds to `collect_chunks_node`.
+
+**Outcome B — Tool required:**
+If the question requires chemistry document information, the agent makes a **tool call**:
+
+```python
+AIMessage(
+    content="",
+    tool_calls=[{
+        "name": "retrieve_chunks",
+        "args": {
+            "query": "flash point hazard",
+            "doc_type": "sds"
+        }
+    }]
+)
+```
+
+---
+
+### Step 5: Tool Execution — Vector Search
+
+```
+core/tools.retrieve_chunks (ToolNode) → services/search_service.vector_search
+```
+
+When the agent calls `retrieve_chunks`, the tool executes:
+
+1. **Generate query embedding:**
+   ```python
+   query_vector = generate_embedding("flash point hazard")
+   ```
+
+2. **Vector search in Azure AI Search:**
+   ```python
+   chunks = vector_search(
+       query_vector=query_vector,
+       doc_type="sds",  # filtered by doc type
+       top_k=5,
+   )
+   ```
+
+3. **Return structured results:**
+   ```python
+   {
+       "chunks": [
+           {"content": "Flash point: 23°C", "source": "chemical_x_sds.pdf", "section": "Section 9: Physical Properties", "score": 0.923},
+           ...
+       ]
+   }
+   ```
+
+---
+
+### Step 6: Loop Continuation or End
+
+```
+core/nodes.should_continue → LangGraph conditional edge
+```
+
+After tool execution, control returns to `agent_node`. The loop continues based on:
+
+| Condition | Next Step |
+|-----------|-----------|
+| Agent made another tool call | → `tools` (execute again) |
+| No more tool calls | → `collect_chunks` |
+| Iterations ≥ 5 (safety cap) | → END |
+
+**Why 5-iteration cap?** Prevents infinite loops if the agent gets stuck in tool-calling behavior.
+
+---
+
+### Step 7: Chunk Collection
+
+```
+core/nodes.collect_chunks_node
+```
+
+Extracts all retrieved chunks from `ToolMessage` objects in the conversation:
+
+```python
+for msg in state["messages"]:
+    if isinstance(msg, ToolMessage):
+        result = json.loads(msg.content)
+        all_chunks.extend(result.get("chunks", []))
+```
+
+Returns: `{"chunks_retrieved": [...], "tool_was_called": True}`
+
+---
+
+### Step 8: Final Answer Generation
+
+The **Reasoning Agent** now has:
+- Retrieved document chunks
+- Structured context from the knowledge base
+
+It generates a **grounded answer** citing sources:
+
+> *"According to Section 9 (Physical Properties) of chemical_x_sds.pdf, the flash point is 23°C."*
+
+---
+
+### Step 9: Memory Update
+
+```
+core/memory_manager.add_turn()
+```
+
+The conversation turn is stored in session memory:
+
+```python
+st.session_state["conversation_memory"].append({
+    "role": "user",
+    "content": "What is the flash point?",
+})
+st.session_state["conversation_memory"].append({
+    "role": "assistant",
+    "content": "According to Section 9...",
+})
+```
+
+**Why session memory?** Provides short-term context for follow-up questions without replacing document retrieval.
+
+---
+
+### Query Flow Summary
+
+```
+User submits question
+       ↓
+[Agent 1] Query Classifier → determines SDS/TDS
+       ↓
+[Agent 2] Reasoning Agent → decides to call tool?
+       ↓
+Tool: retrieve_chunks → Azure AI Search (vector search)
+       ↓
+Loop: agent_node ←→ tools (max 5 iterations)
+       ↓
+collect_chunks_node → extracts retrieved chunks
+       ↓
+Agent generates grounded answer with citations
+       ↓
+Memory updated → response to user
+```
+
+---
+
+## Tech Stack Justification
+
+| Component | Technology | Justification |
+|-----------|------------|----------------|
+| **LLM** | Azure OpenAI GPT-4o | Enterprise-grade, tool-calling support, SDS/TDS domain knowledge |
+| **Embeddings** | text-embedding-3-large | High-dimensional (3072) for fine-grained chemistry semantic matching |
+| **Vector Search** | Azure AI Search | Native HNSW, metadata filtering, per-user isolation |
+| **Blob Storage** | Azure Blob Storage | Durable, scalable raw PDF storage |
+| **UI** | Streamlit | Rapid prototyping, tab-based navigation, session state management |
+| **Graph** | LangGraph | State-driven agentic loops with built-in conditional edges |
+| **PDF** | pypdf | Pure Python, no external dependencies |
+| **Tokenization** | tiktoken | Accurate token counting for context window management |
+
+---
+
+## Continuous Narrative for Demo
+
+> *"When a user uploads a PDF, the system extracts the text, classifies it as either a Safety Data Sheet or Technical Data Sheet using Azure OpenAI, chunks it using token-based splitting with overlap, generates 3072-dimensional embeddings, and indexes everything to Azure AI Search — all in real-time.*
+>
+> *When the user asks a question, it first goes to our Query Classifier agent which determines whether they're asking about safety information (SDS) or technical specifications (TDS). This doc_type is critical — it filters all subsequent searches to the right document category.*
+>
+> *The question then enters the Reasoning Agent, which has access to the retrieve_chunks tool. The agent decides whether it needs to fetch document evidence. If it does, the tool embeds the query, searches the vector index, and returns relevant chunks. This agent-tool loop can iterate up to 5 times for complex questions.*
+>
+> *Finally, the agent generates a grounded answer citing the exact source document and section — no hallucinations, just facts pulled from your uploaded chemistry documents."*
+
+---
+
+This flow demonstrates a **fully serverless, enterprise-grade RAG system** that combines agentic reasoning with vector search to deliver accurate, source-grounded answers over chemistry documents.
