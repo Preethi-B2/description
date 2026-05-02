@@ -1,0 +1,1177 @@
+
+
+# ETRM Agentic AI System — End-to-End Execution Flow
+
+## Overview
+
+This is a **serverless agentic AI system** built on Azure Functions that accepts multi-modal inputs (documents, audio, text), processes them through specialized agents, and generates enterprise traceability artifacts (RTM, BDD, FUT) for technology risk management.
+
+---
+
+## 1. User Input Layer
+
+The user initiates a request by sending an HTTP POST to one of the agent endpoints:
+
+```
+POST https://<function-app>.azurewebsites.net/api/agents/design
+Content-Type: application/json
+```
+
+With a payload containing:
+
+- **notes_files**: Array of document files (docx, pdf, txt, md) containing meeting notes
+- **audio_files**: Array of audio files (m4a, mp3, wav) from meetings or discussions
+- **user_text**: Free-form text description or additional requirements
+
+Example payload:
+
+```json
+{
+  "notes_files": [{"file_name": "requirements.docx", "content_base64": "UEsDBBQABgA..."}],
+  "audio_files": [{"file_name": "meeting.m4a", "content_base64": "SUhTdmFs..."}],
+  "user_text": "Generate RTM for Payment Gateway v2"
+}
+```
+
+---
+
+## 2. Azure Functions Gateway
+
+The request hits the Azure Functions host which routes to the appropriate agent based on the URL:
+
+| Agent | Route | Purpose |
+|-------|-------|---------|
+| Design Agent | `/agents/design` | Generate Requirements Traceability Matrix (RTM) |
+| BDD Agent | `/agents/bdd` | Generate Behavior-Driven Development scenarios |
+| Selection Agent | `/agents/selection` | Handle option/technology selection |
+| FUT Agent | `/agents/fut` | Generate Functional Under Test documents |
+
+Each agent is exposed via an HTTP trigger with anonymous authentication.
+
+---
+
+## 3. Design Agent Execution Flow
+
+The main entry point is `etrm_design_agent.handle_design()` which orchestrates the entire pipeline:
+
+### Step 1: Request Parsing
+
+The agent parses the incoming HTTP request body as JSON and extracts:
+- `notes_files` — List of uploaded document files
+- `audio_files` — List of uploaded audio files
+- `user_text` — Additional text input from the user
+
+### Step 2: Service Initialization
+
+Four core services are instantiated:
+
+1. **FileIngestionService** — Handles file persistence
+2. **DocumentParserService** — Extracts text from documents
+3. **TranscriptionService** — Converts audio to text (currently stubbed)
+4. **DocumentGenerationService** — Generates RTM Excel files
+
+### Step 3: File Ingestion
+
+The `FileIngestionService.save_many()` method persists uploaded files:
+
+- Notes files are saved to design_notes
+- Audio files are saved to design_audio
+
+Files are decoded from base64 and written to the local filesystem (using `/tmp` for Azure compatibility).
+
+### Step 4: Document Parsing
+
+The `DocumentParserService.extract_from_upload()` method processes each notes file:
+
+- **.txt / .md** files → Decoded directly as UTF-8 text
+- **.docx** files → Parsed using `python-docx` library, extracting paragraph text
+- **.pdf** files → Parsed using `pypdf` library, extracting text from each page
+
+All extracted text is concatenated into a single `notes_text` string.
+
+### Step 5: Audio Transcription
+
+The `TranscriptionService.transcribe()` method processes audio files:
+
+- Currently stubbed for production safety
+- Placeholder returns: `"[Transcription placeholder for <filename>]"`
+- Intended integration: Azure Speech Services or OpenAI Whisper
+
+Extracted text is concatenated into `audio_text`.
+
+### Step 6: Content Combination
+
+All three sources of content are merged:
+
+```python
+combined_text = notes_text + "\n\n" + audio_text + "\n\n" + user_text
+```
+
+If `combined_text` is empty, a 400 Bad Request is returned.
+
+### Step 7: Requirement Extraction
+
+The `_extract_requirements()` method parses the combined text:
+
+- Splits content into lines
+- Creates a requirement object for each non-empty line
+- Assigns sequential IDs: `REQ-001`, `REQ-002`, `REQ-003`, etc.
+- Sets default values:
+  - `description` = same as requirement text
+  - `acceptance_criteria` = "Requirement validated in UAT"
+  - `priority`, `functional_area`, `owner`, `effort` = null
+
+### Step 8: RTM Excel Generation
+
+The `DocumentGenerationService.build_rtm_excel()` method:
+
+1. **Template Resolution** — Looks for RTM template in order:
+   - Environment variable `RTM_TEMPLATE_PATH`
+   - `data/uploads/RTM Template.xlsx`
+   - `data/uploads/rtm_template.xlsx`
+   - If none found, creates a new workbook
+
+2. **Header Validation** — Ensures template has required columns:
+   - RTM ID, Requirement, Description, Acceptance Criteria, Priority, Functional Area, Owner, Effort
+
+3. **Data Population** — Clears existing rows and writes new requirements
+
+4. **Storage** — Saves to outputs or `/tmp/artifacts/`
+
+### Step 9: Response
+
+Returns a JSON response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "rtm_blob": "etrm_rtm.xlsx",
+    "total_requirements": 25
+  }
+}
+```
+
+---
+
+## 4. Service Layer Details
+
+### FileIngestionService
+
+- **Base path**: `/tmp/uploads` (Azure) or uploads (local)
+- **Method**: `save_many(files, subdir)` → returns list of saved file paths
+- **Encoding**: Base64 decode before writing
+
+### DocumentParserService
+
+- **Supported formats**: `.txt`, `.md`, `.docx`, `.pdf`
+- **Method**: `extract_from_upload(file)` → returns extracted text string
+
+### TranscriptionService
+
+- **Status**: Stubbed
+- **Method**: `transcribe(file)` → returns placeholder text
+- **Future**: Azure Speech or Whisper integration
+
+### DocumentGenerationService
+
+- **Output format**: Excel (.xlsx) via `openpyxl`
+- **Method**: `build_rtm_excel(file_name, requirements)` → returns blob name
+
+### StorageService
+
+- **Base path**: `/tmp/artifacts` (Azure) or outputs (local)
+- **Method**: `upload_to_artifacts(content, filename)` → returns file path
+
+---
+
+## 5. Data Flow Summary
+
+```
+User Input
+    │
+    ▼
+HTTP POST → Azure Functions (design_agent)
+    │
+    ▼
+Parse JSON → Extract files & text
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  FileIngestionService               │
+│  - Save notes to design_notes/      │
+│  - Save audio to design_audio/      │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  DocumentParserService              │
+│  - Parse docx, pdf, txt, md        │
+│  - Extract text content            │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  TranscriptionService               │
+│  - Convert audio to text           │
+│  (stubbed)                         │
+└─────────────────────────────────────┘
+    │
+    ▼
+Combine all text sources
+    │
+    ▼
+Extract requirements (line-by-line)
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  DocumentGenerationService         │
+│  - Build RTM Excel                 │
+│  - Validate template               │
+│  - Populate requirements           │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  StorageService                    │
+│  - Save to artifacts/              │
+└─────────────────────────────────────┘
+    │
+    ▼
+Return JSON response
+```
+
+---
+
+## 6. Complete Request-Response Example
+
+### Request
+
+```
+POST /api/agents/design HTTP/1.1
+Host: etrm-agentic-ai.azurewebsites.net
+Content-Type: application/json
+
+{
+  "notes_files": [
+    {
+      "file_name": "requirements.docx",
+      "content_base64": "UEsDBBQABgA..."
+    }
+  ],
+  "audio_files": [
+    {
+      "file_name": "meeting.m4a",
+      "content_base64": "SUhTdmFs..."
+    }
+  ],
+  "user_text": "Generate RTM for Payment Gateway v2"
+}
+```
+
+### Response
+
+```
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "success": true,
+  "data": {
+    "rtm_blob": "/tmp/artifacts/etrm_rtm.xlsx",
+    "total_requirements": 12,
+    "requirements_extracted": [
+      {"requirement_id": "REQ-001", "requirement": "..."},
+      {"requirement_id": "REQ-002", "requirement": "..."}
+    ]
+  }
+}
+```
+
+---
+
+## 7. Technology Stack
+
+| Component | Technology |
+|-----------|------------|
+| Compute | Azure Functions (Python 3.x) |
+| Trigger | HTTP Trigger v2 |
+| Agents | Python functions |
+| Services | Python classes |
+| Excel Generation | openpyxl |
+| Word Generation | python-docx |
+| PDF Parsing | pypdf |
+| Storage | Local filesystem (/tmp) |
+| SDK | azure-functions |
+
+---
+
+## 8. File Structure
+
+```
+backend/
+├── host.json                    ← Azure Functions host config
+├── local.settings.json          ← Local development settings
+├── requirements.txt             ← Python dependencies
+├── agents/
+│   ├── __init__.py
+│   └── etrm_design_agent.py     ← Main design agent logic
+├── api/
+│   └── __init__.py
+├── artifacts/
+│   └── function.json            ← Artifacts endpoint config
+├── bdd_agent/
+│   ├── __init__.py              ← BDD agent entry point
+│   └── function.json            ← BDD endpoint config
+├── design_agent/
+│   ├── __init__.py              ← Design agent entry point
+│   └── function.json            ← Design endpoint config
+├── fut_agent/
+│   ├── __init__.py              ← FUT agent entry point
+│   └── function.json            ← FUT endpoint config
+├── selection_agent/
+│   ├── __init__.py              ← Selection agent entry point
+│   └── function.json            ← Selection endpoint config
+├── services/
+│   ├── document_generation_service.py
+│   ├── document_parser_service.py
+│   ├── file_ingestion_service.py
+│   ├── storage_service.py
+│   └── transcription_service.py
+├── data/
+│   ├── uploads/                 ← User uploaded files
+│   ├── design_notes/           ← Parsed notes
+│   ├── design_audio/           ← Stored audio
+│   ├── knowledge/              ← Domain knowledge
+│   └── outputs/                ← Generated documents
+└── models/
+    └── __init__.py
+```
+
+---
+
+## Summary
+
+This system implements an **end-to-end pipeline** where:
+
+1. **User** submits multi-modal input (documents, audio, text) via HTTP POST
+2. **Azure Functions** routes the request to the appropriate agent
+3. **Agent** orchestrates service calls:
+   - Ingest files → Parse documents → Transcribe audio → Extract requirements → Generate RTM
+4. **Services** handle specialized tasks (file I/O, parsing, generation, storage)
+5. **Response** returns a success flag with the generated artifact location and requirement count
+
+The flow is continuous: input → processing → output, with no human intervention required during execution.
+
+
+
+
+Let me explore all four agents in detail to understand their implementation and purpose.
+ 
+
+Searched for text `handle_bdd|handle_selection|handle_fut` (`**/*.py`), 6 results
+
+
+
+Based on my analysis of the codebase, here are the details of all 4 agents:
+
+---
+
+# Agent 1: Design Agent
+
+## Endpoint
+```
+POST /api/agents/design
+```
+
+## Entry Point
+- **File**: __init__.py
+- **Handler**: etrm_design_agent.py → `handle_design()`
+
+## Purpose
+Generates a **Requirements Traceability Matrix (RTM)** from user inputs (documents, audio, text).
+
+## Input Payload
+```json
+{
+  "notes_files": [
+    {"file_name": "requirements.docx", "content_base64": "..."}
+  ],
+  "audio_files": [
+    {"file_name": "meeting.m4a", "content_base64": "..."}
+  ],
+  "user_text": "Generate RTM for Payment Gateway v2"
+}
+```
+
+## Execution Flow
+
+| Step | Service | Action |
+|------|---------|--------|
+| 1 | FileIngestionService | Save uploaded files to design_notes and design_audio |
+| 2 | DocumentParserService | Extract text from `.txt`, `.md`, `.docx`, `.pdf` files |
+| 3 | TranscriptionService | Convert audio to text (currently stubbed) |
+| 4 | Combine | Merge notes_text + audio_text + user_text |
+| 5 | Extract | Parse each line as a requirement (REQ-001, REQ-002, ...) |
+| 6 | DocumentGenerationService | Build RTM Excel with headers: RTM ID, Requirement, Description, Acceptance Criteria, Priority, Functional Area, Owner, Effort |
+| 7 | StorageService | Save to outputs or `/tmp/artifacts/` |
+
+## Output
+```json
+{
+  "success": true,
+  "data": {
+    "rtm_blob": "etrm_rtm.xlsx",
+    "total_requirements": 25
+  }
+}
+```
+
+## Status
+✅ **Fully Implemented**
+
+---
+
+# Agent 2: BDD Agent
+
+## Endpoint
+```
+POST /api/agents/bdd
+```
+
+## Entry Point
+- **File**: __init__.py
+- **Handler**: `agents.bdd_agent` → `handle_bdd()`
+
+## Purpose
+Generates **Behavior-Driven Development (BDD)** scenarios from requirements.
+
+## Expected Input
+```json
+{
+  "requirements": [
+    {"requirement_id": "REQ-001", "requirement": "User can login with email"},
+    {"requirement_id": "REQ-002", "requirement": "User can reset password"}
+  ],
+  "feature": "Authentication",
+  "user_text": "Generate BDD scenarios for login feature"
+}
+```
+
+## Expected Output
+```json
+{
+  "success": true,
+  "data": {
+    "bdd_scenarios": [
+      {
+        "feature": "Authentication",
+        "scenario": "Successful login with valid credentials",
+        "given": "User is on the login page",
+        "when": "User enters valid email and password",
+        "then": "User is redirected to dashboard"
+      }
+    ],
+    "total_scenarios": 10
+  }
+}
+```
+
+## Status
+⚠️ **Stub Implementation** — The agent entry point exists but the handler module (`agents/bdd_agent.py`) is not yet created in the codebase.
+
+---
+
+# Agent 3: Selection Agent
+
+## Endpoint
+```
+POST /api/agents/selection
+```
+
+## Entry Point
+- **File**: __init__.py
+- **Handler**: `agents.selection_agent` → `handle_selection()`
+
+## Purpose
+Handles **option/technology selection** — helps choose between different technical options, frameworks, or solutions based on criteria.
+
+## Expected Input
+```json
+{
+  "options": [
+    {"name": "Option A", "criteria": {"cost": 1000, "time": 2, "risk": "low"}},
+    {"name": "Option B", "criteria": {"cost": 1500, "time": 1, "risk": "medium"}}
+  ],
+  "decision_criteria": ["cost", "time", "risk"],
+  "user_text": "Which option is best for our project?"
+}
+```
+
+## Expected Output
+```json
+{
+  "success": true,
+  "data": {
+    "recommended": "Option B",
+    "reasoning": "Best balance of cost, time, and risk",
+    "scores": {
+      "Option A": {"cost": 8, "time": 5, "risk": 9, "total": 22},
+      "Option B": {"cost": 6, "time": 9, "risk": 7, "total": 22}
+    }
+  }
+}
+```
+
+## Status
+⚠️ **Stub Implementation** — The agent entry point exists but the handler module (`agents/selection_agent.py`) is not yet created in the codebase.
+
+---
+
+# Agent 4: FUT Agent
+
+## Endpoint
+```
+POST /api/agents/fut
+```
+
+## Entry Point
+- **File**: __init__.py
+- **Handler**: `agents.fut_agent` → `handle_fut()`
+
+## Purpose
+Generates **Functional Under Test (FUT)** documents — detailed test case specifications for each requirement.
+
+## Expected Input
+```json
+{
+  "requirements": [
+    {"requirement_id": "REQ-001", "requirement": "User can login"}
+  ],
+  "test_type": "unit",
+  "user_text": "Generate FUT documents for authentication module"
+}
+```
+
+## Expected Output
+```json
+{
+  "success": true,
+  "data": {
+    "fut_documents": [
+      {
+        "requirement_id": "REQ-001",
+        "test_case_id": "TC-001",
+        "description": "Verify successful login with valid credentials",
+        "preconditions": ["User exists in database", "User is active"],
+        "test_steps": [
+          "Enter valid email",
+          "Enter valid password",
+          "Click login button"
+        ],
+        "expected_result": "User is logged in and redirected to dashboard",
+        "test_type": "positive"
+      }
+    ],
+    "total_test_cases": 45
+  }
+}
+```
+
+## Status
+⚠️ **Stub Implementation** — The agent entry point exists but the handler module (`agents/fut_agent.py`) is not yet created in the codebase.
+
+---
+
+# Summary Table
+
+| Agent | Route | Purpose | Status |
+|-------|-------|---------|--------|
+| **Design Agent** | `/agents/design` | Generate RTM Excel from requirements | ✅ Implemented |
+| **BDD Agent** | `/agents/bdd` | Generate BDD scenarios | ⚠️ Stub |
+| **Selection Agent** | `/agents/selection` | Technology/option selection | ⚠️ Stub |
+| **FUT Agent** | `/agents/fut` | Generate Functional Under Test docs | ⚠️ Stub |
+
+---
+
+# Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        USER REQUEST                              │
+└─────────────────────────────────────────────────────────────────┘
+                                 │
+           ┌─────────────────────┼─────────────────────┐
+           ▼                     ▼                     ▼
+    ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+    │ Design Agent │      │  BDD Agent   │      │ Selection    │
+    │   /design    │      │    /bdd      │      │   /selection │
+    └──────────────┘      └──────────────┘      └──────────────┘
+           │                     │                     │
+           ▼                     ▼                     ▼
+    ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+    │   RTM.xlsx   │      │ BDD Scenarios│      │ Recommendation│
+    └──────────────┘      └──────────────┘      └──────────────┘
+```
+
+---
+
+# Current Codebase Status
+
+Only **1 of 4 agents** is fully implemented:
+
+- ✅ etrm_design_agent.py — **Exists and functional**
+- ❌ `agents/bdd_agent.py` — **Missing**
+- ❌ `agents/selection_agent.py` — **Missing**
+- ❌ `agents/fut_agent.py` — **Missing**
+
+The stub files in the agent folders (__init__.py, __init__.py, __init__.py) reference handler modules that have not yet been created.
+
+
+## RTM Agent — Complete Detailed Explanation
+
+The RTM agent in this codebase is the **Design Agent**. It is the only fully implemented agent, and its job is to generate a **Requirements Traceability Matrix** from uploaded notes, audio, and user text.
+
+---
+
+## 1. Entry Point
+
+- **Azure Function route:** `POST /api/agents/design`
+- **Trigger config:** function.json
+- **Function bootstrap:** __init__.py
+- **Core handler:** etrm_design_agent.py → `handle_design(req)`
+
+When a request arrives, Azure Functions executes __init__.py, which imports and calls `handle_design(req)`.
+
+---
+
+## 2. Input Format
+
+The RTM agent expects a JSON request body like:
+
+```json
+{
+  "notes_files": [
+    {"file_name": "requirements.docx", "content_base64": "..."}
+  ],
+  "audio_files": [
+    {"file_name": "meeting.m4a", "content_base64": "..."}
+  ],
+  "user_text": "Generate RTM for our new payment gateway"
+}
+```
+
+- `notes_files`: documents containing requirements/meeting notes
+- `audio_files`: audio recordings of discussion
+- `user_text`: free-form text input
+
+---
+
+## 3. Request Validation
+
+In etrm_design_agent.py:
+
+- `_parse_request(req)` reads JSON
+- ensures request body is a JSON object
+- raises `ValueError` if invalid
+
+If invalid, the response is:
+
+- HTTP 400
+- `{"success": false, "error": "message"}`
+
+---
+
+## 4. Service Initialization
+
+`handle_design()` creates four service objects:
+
+- `FileIngestionService()`
+- `DocumentParserService()`
+- `TranscriptionService()`
+- `DocumentGenerationService()`
+
+These services handle each major stage of the RTM pipeline.
+
+---
+
+## 5. File Persistence
+
+`FileIngestionService.save_many(files, subdir)` saves uploaded file payloads to disk:
+
+- default base path: `/tmp/uploads` (Azure compatible)
+- stores:
+  - notes in `design_notes`
+  - audio in `design_audio`
+
+Each file is decoded from base64 and written to a real file path.
+
+---
+
+## 6. Text Extraction from Notes
+
+`DocumentParserService.extract_from_upload(f)` supports:
+
+- `.txt` and `.md`
+- `.docx`
+- `.pdf`
+
+Behavior:
+- text files → direct UTF-8 decode
+- docx → parsed with `python-docx`, extracting paragraphs
+- pdf → parsed with `pypdf`, extracting page text
+
+It returns a text string for each file, and all text is concatenated into `notes_text`.
+
+---
+
+## 7. Audio Transcription
+
+`TranscriptionService.transcribe(f)` is called for each uploaded audio file.
+
+Current behavior:
+- stub implementation
+- returns placeholder text:
+  - `"[Transcription placeholder for <file_name>]"`
+
+This means audio transcription is not yet real, but the construction is in place for future integration.
+
+---
+
+## 8. Content Aggregation
+
+The agent combines:
+- parsed notes text
+- audio transcription text
+- user text
+
+```python
+combined_text = "\n\n".join(
+    t for t in [notes_text, audio_text, user_text] if t
+)
+```
+
+If `combined_text` is empty, the agent returns:
+- HTTP 400
+- error `"No usable input content provided"`
+
+---
+
+## 9. Requirement Extraction
+
+`_extract_requirements(combined_text)` turns the combined text into structured requirement records.
+
+Process:
+- split combined text into lines
+- remove blank lines
+- for each non-empty line:
+  - create a requirement dictionary
+  - `requirement_id`: `REQ-001`, `REQ-002`, ...
+  - `requirement`: line text
+  - `description`: same as requirement
+  - `acceptance_criteria`: `"Requirement validated in UAT"`
+  - `priority`, `functional_area`, `owner`, `effort`: `None`
+
+This is a simple line-based requirement parser, suitable for turning raw notes into an RTM-ready dataset.
+
+---
+
+## 10. RTM Excel Generation
+
+`DocumentGenerationService.build_rtm_excel(file_name="etrm_rtm.xlsx", requirements=requirements)` performs the artifact build.
+
+### 10.1 Template Locate
+`_resolve_template_path()` looks for an RTM template in this order:
+
+1. `RTM_TEMPLATE_PATH` environment variable
+2. `data/uploads/RTM Template.xlsx`
+3. `data/uploads/rtm_template.xlsx`
+
+If no template is found, it creates a new workbook.
+
+### 10.2 Workbook Load
+`_load_rtm_workbook()`:
+- loads template if present
+- otherwise creates a new `openpyxl.Workbook`
+- sets worksheet title to `RTM`
+- appends header row if workbook is new
+
+### 10.3 Header Validation
+`_validate_template_headers(ws)` confirms worksheet headers exactly match:
+
+- `RTM ID`
+- `Requirement`
+- `Description`
+- `Acceptance Criteria`
+- `Priority`
+- `Functional Area`
+- `Owner`
+- `Effort`
+
+If headers are wrong or extra headers exist, it raises `ValueError`.
+
+### 10.4 Data Cleaning
+`_clear_existing_rows(ws)` removes any existing content below the header, leaving the sheet ready for fresh requirements.
+
+### 10.5 Data Writing
+The service writes each requirement into the sheet row by row.
+
+### 10.6 Effort Normalization
+`_coerce_effort(value)` converts effort values to:
+- numeric if possible
+- blank otherwise
+
+### 10.7 Saving Artifact
+The generated workbook is saved through `StorageService.upload_to_artifacts(content, filename)`:
+
+- default artifact base: `/tmp/artifacts`
+- writes bytes to disk
+- returns the saved file path
+
+---
+
+## 11. Final HTTP Response
+
+After generating the RTM artifact, the agent returns:
+
+```json
+{
+  "success": true,
+  "data": {
+    "rtm_blob": "etrm_rtm.xlsx",
+    "total_requirements": 12
+  }
+}
+```
+
+This response includes:
+- `rtm_blob`: the generated Excel filename/path
+- `total_requirements`: number of extracted requirements
+
+---
+
+## 12. Supporting Files and Components
+
+Key files used by the RTM agent:
+
+- function.json
+- __init__.py
+- etrm_design_agent.py
+- file_ingestion_service.py
+- document_parser_service.py
+- transcription_service.py
+- document_generation_service.py
+- storage_service.py
+
+---
+
+## 13. RTM Agent Behavior Summary
+
+The RTM agent is a full pipeline that:
+
+1. accepts multi-modal user input
+2. persists user files safely
+3. extracts text from documents
+4. transcribes audio (placeholder)
+5. merges all content into one source
+6. converts raw text lines into structured requirements
+7. builds a validated RTM Excel sheet
+8. stores the output artifact
+9. returns success metadata
+
+This is the complete “whole RTM agent” flow in this repository.
+
+## RTM Agent Flow — Input to Output
+
+### 1. User submits the request
+- User sends an HTTP `POST` to:
+  - `/api/agents/design`
+- Request body contains:
+  - `notes_files`: array of uploaded documents (`.docx`, `.pdf`, `.txt`, `.md`)
+  - `audio_files`: array of uploaded audio files (`.m4a`, `.mp3`, `.wav`)
+  - `user_text`: free-form requirement description or meeting summary
+
+### 2. Azure Functions receives the request
+- Route configured in function.json
+- Function entry is __init__.py
+- This entry imports and calls `agents/etrm_design_agent.handle_design(req)`
+
+### 3. Request parsing and validation
+- `handle_design(req)` calls `_parse_request(req)`
+- `_parse_request`:
+  - reads the request JSON
+  - ensures the body is a JSON object
+  - extracts `notes_files`, `audio_files`, and `user_text`
+- If invalid, returns HTTP `400` with an error JSON
+
+### 4. Initialize core services
+The RTM pipeline creates:
+- `FileIngestionService`
+- `DocumentParserService`
+- `TranscriptionService`
+- `DocumentGenerationService`
+
+### 5. Save uploaded files
+- `FileIngestionService.save_many(notes_files, subdir="design_notes")`
+- `FileIngestionService.save_many(audio_files, subdir="design_audio")`
+- Files are decoded from base64 and written to disk in `/tmp/uploads/...` or local temp folders
+
+### 6. Extract text from notes
+For each note file:
+- `DocumentParserService.extract_from_upload(file)` decides by extension
+- `.txt` / `.md` → decode text
+- `.docx` → parse paragraphs with `python-docx`
+- `.pdf` → extract text pages with `pypdf`
+- Concatenates all parsed text into `notes_text`
+
+### 7. Transcribe audio
+For each audio file:
+- `TranscriptionService.transcribe(file)` runs
+- Current implementation returns a placeholder:
+  - `"[Transcription placeholder for <file_name>]"`
+
+### 8. Combine all input text
+- Build a single text source:
+  - `notes_text`
+  - `audio_text`
+  - `user_text`
+- Join them with blank lines
+- If the final combined text is empty, return HTTP `400`
+
+### 9. Extract requirements
+- `_extract_requirements(combined_text)` processes the text
+- It:
+  - splits the text into non-empty lines
+  - creates one requirement per line
+  - assigns IDs: `REQ-001`, `REQ-002`, ...
+  - sets:
+    - `requirement`
+    - `description`
+    - `acceptance_criteria = "Requirement validated in UAT"`
+    - `priority`, `functional_area`, `owner`, `effort` = `None`
+
+### 10. Generate RTM Excel
+- `DocumentGenerationService.build_rtm_excel(file_name="etrm_rtm.xlsx", requirements=requirements)` runs
+- It resolves a template path:
+  - `RTM_TEMPLATE_PATH` env var
+  - `data/uploads/RTM Template.xlsx`
+  - `data/uploads/rtm_template.xlsx`
+- If no template exists, it creates a new workbook
+- It validates the RTM header row:
+  - `RTM ID`
+  - `Requirement`
+  - `Description`
+  - `Acceptance Criteria`
+  - `Priority`
+  - `Functional Area`
+  - `Owner`
+  - `Effort`
+- Clears existing rows below the header
+- Writes each requirement into the sheet
+
+### 11. Save artifact
+- `StorageService.upload_to_artifacts(content, filename)` saves the generated Excel
+- Default storage folder is `/tmp/artifacts` or equivalent Azure temp storage
+
+### 12. Return the result
+- Final response is JSON:
+```json
+{
+  "success": true,
+  "data": {
+    "rtm_blob": "etrm_rtm.xlsx",
+    "total_requirements": 12
+  }
+}
+```
+
+### 13. Full input-to-output sequence
+1. User sends documents, audio, and text to `/api/agents/design`
+2. Azure Functions routes to __init__.py
+3. `handle_design` parses and validates input
+4. Files are persisted by `FileIngestionService`
+5. Documents are parsed by `DocumentParserService`
+6. Audio is stub-transcribed by `TranscriptionService`
+7. All text is merged into one requirement source
+8. Requirements are extracted line-by-line
+9. `DocumentGenerationService` builds the RTM workbook
+10. `StorageService` saves the Excel file
+11. API returns success and artifact metadata
+
+This is the complete RTM agent flow from user input through processing to the final output artifact.
+
+
+## RTM Agent Tech Stack
+
+- **Language**
+  - Python
+
+- **Serverless Host**
+  - Azure Functions
+
+- **HTTP Framework**
+  - `azure-functions` Python SDK
+
+- **Document Parsing**
+  - `python-docx` for `.docx`
+  - `pypdf` for `.pdf`
+  - built-in base64/UTF-8 decoding for `.txt` and `.md`
+
+- **Excel Generation**
+  - `openpyxl`
+
+- **Storage / File Handling**
+  - local filesystem temporary storage
+  - uses `/tmp`-style paths for Azure compatibility
+  - `os`, `pathlib`, `io.BytesIO`
+
+- **Supporting Libraries**
+  - `requests` is in requirements, though not directly in the RTM agent logic
+  - `python-pptx` is installed but not currently used by the RTM flow
+
+- **Artifact persistence**
+  - custom `StorageService` writing files to `/tmp/artifacts` or equivalent local temp directory
+
+So the RTM pipeline is primarily:
+- Python + Azure Functions
+- Document parsing with `python-docx` / `pypdf`
+- Excel creation with `openpyxl`
+- file persistence using local temp storage via Python standard library
+
+
+
+Reviewing the key backend and frontend files to map the execution flow end-to-end.
+
+## End-to-End Demo Flow
+
+### 1. User opens the application
+- The browser loads the frontend from frontend built with **React 18 + TypeScript + Vite**.
+- main.tsx mounts `App` from App.tsx.
+- The UI is styled using theme tokens in theme.ts and rendered as a 4-tab workflow.
+
+### 2. User enters client requirements
+- In Tab 1, the user fills in:
+  - company name
+  - project start date
+  - user range
+  - industry, region, product selection
+  - physical and financial trade types
+  - pricing model
+  - current ETRM and ERP environment
+  - deployment preference
+- Selections are stored as React state inside `App`.
+- The `SelectionPage` component also auto-computes a recommended scoring profile via `calculateIntelligentWeights(...)`.
+
+### 3. Frontend validation and preparation
+- The frontend validates:
+  - company name is required
+  - start date is required
+  - user range `from <= to`
+  - at least one product selected
+  - weights add to exactly 100
+- If validation passes, the user clicks **Run Analysis →**.
+
+### 4. Frontend sends analysis request
+- `App` sends a `POST /analyze` request to the backend with:
+  - `requirements` payload
+  - `weights` payload
+- The request is sent using `fetch("/analyze", ...)`.
+
+### 5. Backend receives and processes the analysis
+- server.js routes `/analyze` to analyze.js.
+- The backend uses:
+  - **Node.js + Express**
+  - `cors` for cross-origin access
+  - `express.json()` to parse JSON bodies
+- analyze.js:
+  - normalizes frontend inputs using maps like `PRODUCT_MAP`, `INSTRUMENT_MAP`, `ERP_MAP`, `DEPLOYMENT_MAP`
+  - calculates match scores:
+    - product fit
+    - instrument support
+    - ERP integration
+    - deployment compatibility
+  - computes a scalability score based on user count and system scalability rating
+  - applies the user-provided weight distribution
+  - aggregates a weighted `finalScore`
+  - computes a `coveragePct`
+- Backend data comes from local JSON in etrmSystems.json—there is no database.
+
+### 6. Backend returns ranked results
+- The backend sorts all systems by composite score and returns:
+  - top 3 shortlist systems
+  - all scored results
+- The response includes:
+  - per-dimension scores
+  - weighted contribution breakdown
+  - final score
+  - coverage percentage
+  - vendor, pros/cons, implementation timeline, cost
+
+### 7. Frontend displays analysis results
+- The app switches to Tab 2 (`AnalysisPage`).
+- It renders:
+  - three ranked system cards
+  - score bars for each dimension
+  - coverage percentage
+  - pros and cons
+  - implementation and cost metadata
+- This gives the demo viewer immediate insight into why the shortlist was chosen.
+
+### 8. Competitor benchmarking tab
+- When the user opens Tab 3, the frontend loads `CompetitorPage`.
+- It issues `GET /competitors` to the backend.
+- competitors.js returns static competitor profiles from competitors.json.
+- The UI shows:
+  - peer company profiles
+  - ETRM system used
+  - cost and duration
+  - strengths and pain points
+  - a short rationale of why the shortlist is stronger for this client
+
+### 9. Executive summary generation
+- Tab 4 loads `SummaryPage`.
+- The frontend sends `POST /summary` with:
+  - the original requirements
+  - weights
+  - analysis results
+- summary.js builds an executive summary object from the payload.
+- This backend route is again **Node.js + Express**, but it does not call AI services—it synthesizes summary contents from the existing input and results.
+
+### 10. Final response and export
+- The summary page shows:
+  - client overview
+  - requirements recap
+  - applied scoring weights
+  - recommended systems with rationale
+- The UI includes a **Download PPT** button, which is currently a mock export action in the frontend.
+- This completes the demo flow: user input → analysis → competitor context → executive summary.
+
+---
+
+## Tech Stack Summary
+
+- Frontend
+  - React 18
+  - TypeScript
+  - Vite
+  - Component-driven page layout
+  - Inline theme styling in theme.ts
+
+- Backend
+  - Node.js
+  - Express
+  - CORS
+  - JSON body parsing
+
+- Data
+  - Static JSON files:
+    - etrmSystems.json
+    - competitors.json
+
+- Runtime
+  - Frontend served via Vite dev server
+  - Backend served on port `4000`
+  - Frontend communicates to backend over standard HTTP endpoints
+
+### Demo highlight
+This is a fully self-contained selection assistant: user inputs drive a deterministic scoring engine, backend ranking logic returns recommendations, competitor benchmarking adds context, and an executive summary completes the decision narrative.
