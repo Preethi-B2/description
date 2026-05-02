@@ -1,0 +1,67 @@
+Energy Trading and Risk Management
+
+Business Need
+1.	Unstructured Requirements Capture: Requirements are captured in meeting notes and recordings, making consolidation slow and error prone.
+2.	Requirements Mapping & Traceability: Business requirements must be accurately mapped to ETRM functional areas, priorities, and traceability artifacts such as RTM, BDD, and FUT.
+3.	Structured ETRM System Evaluation: ETRM system selection requires structured evaluation across scope, functional fit, integration, and coverage.
+4.	Decision Ready Insights & Visibility: Decision makers need clear, auditable views of coverage, gaps, risks, and recommendations for faster approval.
+Solution
+Agent based ETRM automation platform built on Azure App Service using modular AI agents to support RTM, BDD, FUT, and ETRM Selection workflows.
+Unified ingestion and persistence layer leveraging Azure Blob Storage for files and Azure Cosmos DB for metadata, traceability, and normalized domain models.
+Event driven processing pipeline using Azure Service Bus and Azure Functions to asynchronously perform OCR, speech to text, and semantic content extraction.
+Semantic indexing and retrieval layer implemented with Azure AI Search and vector embeddings to ground agent reasoning on extracted requirements.
+Deterministic scoring and recommendation engine implemented in Python, combining hard constraint filtering with weighted multi criteria vendor evaluation logic.
+Controlled Azure OpenAI integration used strictly for reasoning, summarization, and executive narrative generation—isolated from scoring and decision logic.
+Benefits
+<> Intelligent Requirement Extraction
+<> Automated RTM, BDD & FUT Generation
+<> Functional Coverage Visibility
+<> Gaps & Risk Identification
+<> Data Driven ETRM Shortlisting
+<> Transparent Decision Rationale
+
+Tools and tech used
+	Python
+	 Azure App Service
+	 Azure Functions
+	 Azure Service Bus
+	 Azure Blob Storage
+	 Azure Cosmos DB
+	Azure AI Search
+	Azure OpenAI (GPT-5 / Embeddings)
+
+
+ChemSpecAI
+Business Need
+1.	Document Complexity & Volume: Managing large, complex TDS and SDS documents manually leads to inconsistencies and high operational risk.
+2.	Delayed Information Access: Slow access to accurate product and safety data delays customer and regulatory responses.
+3.	Reactive Risk Management: Compliance and safety risks are detected reactively instead of proactively.
+4.	Unstructured Requirements Handling: Requirements scattered in unstructured sources lack visibility and traceability.
+5.	Manual Analysis & Delivery Risk: Manual documentation and analysis drive delays and increase delivery risk.
+Solution
+Streamlit UI – 3 tabbed interface (includes Upload, Chat, Dashboard).
+LangGraph orchestration pipeline – four node agentic graph with conditional edges and a 5 iteration cap.
+GPT-4o mini via Azure OpenAI – classifies SDS vs TDS, generates grounded answers, and drives agentic tool calling at temperature 0.0
+OData enforced document routing and SHA-256 deduplication – type filtering at the search layer, deterministic chunk IDs prevent index bloat on re upload
+Ticktoken chunking and text-embedding-3-small – 500 token context windows embedded into 1536 dim vectors, stored in Azure AI Search HNSW index.
+3-layer Responsible AI – system prompt refusal, Azure Content filter, agent level exception handler, these are the harmful queries refused gracefully, never crashed
+
+Benefits
+<>  Faster TDS & SDS Intelligence Access
+<> Improved Data Accuracy & Consistency
+<> Operational Efficiency at Scale  
+<> Reliable, Auditable AI Responses
+<>  Enterprise Grade Responsible AI
+<> Scalable & Future Ready Architecture
+Tools & Technology Used
+	Python
+	Streamlit
+	LangGraph
+	Pypdf
+	Tiktoken
+	Azure Blob Storage
+	Azure AI Search
+	Azure OpenAI
+     (GPT-4.1/text-embedding-3-small)
+
+
