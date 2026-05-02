@@ -1,0 +1,244 @@
+
+# ⚗️ ChemSpecAI — Chemistry Document Intelligence Platform
+
+## Project Purpose & Problem Solved
+
+**ChemSpecAI** is an enterprise-grade **RAG (Retrieval-Augmented Generation) system** designed to:
+
+1. **Accept PDF uploads at runtime** — Users upload SDS (Safety Data Sheet) or TDS (Technical Data Sheet) documents
+2. **Automatically classify, chunk, and embed** — Process documents without pre-loading data
+3. **Answer natural language questions** — Using agentic tool-calling retrieval grounded in uploaded documents
+
+**Problem Solved:** Chemists, safety officers, and engineers need quick, accurate answers from chemistry documents. Manual searching through lengthy SDS/TDS PDFs is time-consuming. This system enables **semantic Q&A** over chemistry documents with source-grounded answers.
+
+---
+
+## End-to-End Workflow
+
+### Workflow 1: Document Upload (Tab 1)
+
+```
+User uploads PDF
+       ↓
+┌─────────────────────────────┐
+│ 1. Upload to Blob Storage   │  ← Raw PDF stored in Azure Blob
+└─────────────────────────────┘
+       ↓
+┌─────────────────────────────┐
+│ 2. Extract text (pypdf)     │  ← PDF → plain text
+└─────────────────────────────┘
+       ↓
+┌─────────────────────────────┐
+│ 3. Classify doc type        │  ← LLM classifies as SDS or TDS
+└─────────────────────────────┘
+       ↓
+┌─────────────────────────────┐
+│ 4. Chunk text                │  ← Token-based overlapping chunks
+└─────────────────────────────┘
+       ↓
+┌─────────────────────────────┐
+│ 5. Generate embeddings      │  ← Azure OpenAI text-embedding-3-large
+└─────────────────────────────┘
+       ↓
+┌─────────────────────────────┐
+│ 6. Index to Azure Search    │  ← Chunks + vectors indexed
+└─────────────────────────────┘
+```
+
+### Workflow 2: Chat Query (Tab 2)
+
+```
+User asks question
+       ↓
+┌─────────────────────────────┐
+│ 1. Classify query type      │  ← LLM determines SDS vs TDS
+└─────────────────────────────┘
+       ↓
+┌─────────────────────────────┐
+│ 2. Agent reasoning loop     │  ← LangGraph agent decides to call tool
+└─────────────────────────────┘
+       ↓
+┌─────────────────────────────┐
+│ 3. Tool: retrieve_chunks    │  ← Vector search in Azure AI Search
+└─────────────────────────────┘
+       ↓
+┌─────────────────────────────┐
+│ 4. Collect retrieved chunks │  ← Extract from ToolMessage
+└─────────────────────────────┘
+       ↓
+┌─────────────────────────────┐
+│ 5. Generate grounded answer │  ← LLM answers using retrieved context
+└─────────────────────────────┘
+```
+
+---
+
+## Modules & Components
+
+| Module | File | Responsibility |
+|--------|------|-----------------|
+| **App Entry** | app.py | Streamlit tab router, sidebar navigation |
+| **State Management** | state.py | `GraphState` TypedDict — shared state across LangGraph nodes |
+| **Pipeline** | graph.py | LangGraph StateGraph construction, `run_query()` entry point |
+| **Nodes** | nodes.py | `classify_node`, `agent_node`, `collect_chunks_node`, `should_continue` |
+| **Tools** | tools.py | `@tool` decorated `retrieve_chunks` function |
+| **Document Processing** | document_processor.py | PDF extraction → classification → chunking → embedding |
+| **Memory** | memory_manager.py | Short-term session memory (last N turns) |
+| **OpenAI Service** | openai_service.py | Chat completions, embeddings, classification |
+| **Search Service** | search_service.py | Azure AI Search index management, vector search |
+| **Blob Service** | blob_service.py | Azure Blob Storage upload/download |
+| **UI - Upload** | tab_upload.py | Tab 1: File uploader, processing pipeline UI |
+| **UI - Chat** | tab_chat.py | Tab 2: Chat interface, message history, memory controls |
+| **UI - Dashboard** | tab_dashboard.py | Tab 3: Analytics from Azure Search |
+| **Config** | settings.py | All environment variables, defaults |
+| **Chunking** | chunker.py | Token-based text splitting with overlap |
+| **Helpers** | helpers.py | User ID generation, blob path building, sanitization |
+| **Prompts** | `prompts/*.md` | Externalized prompt governance |
+
+---
+
+## Agents & Their Roles
+
+### 1. **Query Classifier Agent** (`classify_node`)
+- **Role:** Determine whether user question relates to SDS or TDS
+- **Input:** `state["question"]`, conversation history
+- **Output:** `{"doc_type": "sds" | "tds"}`
+- **Interaction:** Calls `services/openai_service.classify_query()`
+
+### 2. **Reasoning Agent** (`agent_node`)
+- **Role:** Main LLM agent that decides when to call retrieval tools
+- **Input:** `state["messages"]` (system prompt + memory + current question)
+- **Output:** `AIMessage` (may contain `tool_calls`)
+- **Interaction:** Bound to `TOOLS` via `_get_llm().bind_tools(TOOLS)`
+
+### 3. **Tool Executor** (`ToolNode(TOOLS)`)
+- **Role:** Execute `retrieve_chunks` tool when agent requests it
+- **Input:** Tool call arguments from agent
+- **Output:** `ToolMessage` containing JSON with retrieved chunks
+- **Interaction:** Invokes `core/tools.retrieve_chunks()`
+
+### 4. **Chunk Collector** (`collect_chunks_node`)
+- **Role:** Extract structured chunks from ToolMessages
+- **Input:** `state["messages"]`
+- **Output:** `{"chunks_retrieved": [...], "tool_was_called": bool}`
+- **Interaction:** Parses JSON from tool responses
+
+---
+
+## LangGraph Pipeline — Node-by-Node Flow
+
+```
+┌──────────────┐     ┌──────────┐     ┌──────────┐     ┌────────────────┐
+│   classify   │ ──→ │   agent  │ ──→ │  tools   │ ──→ │ collect_chunks │
+│    node      │     │   node   │     │  (Tool)  │     │      node      │
+└──────────────┘     └──────────┘     └──────────┘     └────────────────┘
+       ↓                    ↓              ↓                        ↓
+  Sets doc_type        LLM decides     Executes              Extracts chunks
+  (sds/tds)           to call tool    retrieve_chunks       from responses
+```
+
+### Conditional Edge: `should_continue`
+
+| Condition | Transition |
+|-----------|------------|
+| `iterations >= 5` | → END (safety cap) |
+| `last_message.tool_calls` exists | → `tools` (call retrieval) |
+| Otherwise | → `collect_chunks` (end loop) |
+
+### State Flow
+
+```python
+GraphState = {
+    "messages": Annotated[list[BaseMessage], operator.add],  # Accumulates
+    "question": str,           # Raw user question
+    "doc_type": str,          # "sds" or "tds"
+    "chunks_retrieved": list, # Retrieved chunk dicts
+    "tool_was_called": bool, # Did agent call tool?
+    "iterations": int,       # Loop count
+    "error": str | None,     # Error propagation
+}
+```
+
+---
+
+## Data Flow Across System
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           USER INTERFACE                                │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                  │
+│  │ Tab: Upload │   │ Tab: Chat   │   │ Tab: Dashboard                  │
+│  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘                  │
+└─────────┼─────────────────┼─────────────────┼──────────────────────────┘
+          │                 │                 │
+          ▼                 ▼                 ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            CORE LAYER                                    │
+│  ┌──────────────────┐  ┌────────────────┐  ┌────────────────────┐    │
+│  │ document_processor│  │ graph.py       │  │ memory_manager.py │    │
+│  │ (PDF → chunks)   │  │ (LangGraph)    │  │ (session memory)   │    │
+│  └────────┬─────────┘  └───────┬────────┘  └─────────┬──────────┘    │
+└───────────┼─────────────────────┼─────────────────────┼──────────────┘
+            │                     │                     │
+            ▼                     ▼                     ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          SERVICES LAYER                                  │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐                │
+│  │ blob_service │   │ openai_service│  │ search_service│                │
+│  │ (Azure Blob) │   │ (Azure OpenAI)│  │ (Azure Search)│               │
+│  └──────────────┘   └──────────────┘   └──────────────┘                │
+└─────────────────────────────────────────────────────────────────────────┘
+            │                     │                     │
+            ▼                     ▼                     ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        AZURE CLOUD SERVICES                              │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐                │
+│  │ Blob Storage │   │ OpenAI       │   │ AI Search    │                │
+│  │ (PDF files)  │   │ (GPT-4o,     │   │ (Vector index│                │
+│  │              │   │  Embeddings) │   │  + chunks)   │                │
+│  └──────────────┘   └──────────────┘   └──────────────┘                │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## External Integrations & Tech Stack
+
+| Category | Technology | Purpose |
+|----------|------------|---------|
+| **LLM** | Azure OpenAI `gpt-4o` | Chat completion, agent reasoning |
+| **Embeddings** | Azure OpenAI `text-embedding-3-large` (3072-dim) | Vectorize chunks & queries |
+| **Vector Search** | Azure AI Search (HNSW) | Semantic search over chunks |
+| **Blob Storage** | Azure Blob Storage | Raw PDF storage |
+| **UI Framework** | Streamlit | Web interface with tabs |
+| **PDF Processing** | `pypdf` | Text extraction from PDFs |
+| **Tokenization** | `tiktoken` (cl100k_base) | Chunk size management |
+| **Graph Orchestration** | LangGraph | Agentic pipeline with state |
+| **Retry Logic** | `tenacity` | Transient Azure error handling |
+| **Config** | `python-dotenv` | Environment variable loading |
+
+---
+
+## Key Design Principles
+
+| Principle | Implementation |
+|-----------|----------------|
+| **Dynamic uploads** | No preloaded data — everything indexed at runtime |
+| **SDS/TDS routing** | LLM classifies both documents and queries |
+| **Agentic retrieval** | LLM decides when to call `retrieve_chunks` tool |
+| **Prompt governance** | All prompts in `prompts/*.md` — zero hardcoded strings |
+| **Short-term memory** | Session-only, last N turns, never replaces retrieval |
+| **User isolation** | Every chunk tagged with `user_id`, all searches filtered |
+| **Azure-native** | OpenAI + AI Search + Blob Storage only |
+
+---
+
+## Summary
+
+ChemSpecAI is a **fully serverless RAG system** running on Azure that:
+
+1. **Ingest** PDFs → Blob Storage → extract → classify → chunk → embed → index
+2. **Query** via agentic LangGraph loop → classify query → retrieve chunks → generate grounded answer
+3. **Visualize** via Streamlit tabs for upload, chat, and dashboard analytics
+
+The system enforces **user isolation** at both storage and search levels, uses **prompt externalization** for governance, and implements **safety caps** (max 5 iterations, ethical/scope refusal messages).
